@@ -1,5 +1,7 @@
 # magpie-vertex-ai
 
+English | [简体中文](README.zh-CN.md)
+
 Maintained fork: [yayamahardika/magpie-vertex-ai](https://github.com/yayamahardika/magpie-vertex-ai), based on [HzTTT/magpie-vertex-ai](https://github.com/HzTTT/magpie-vertex-ai). Original copyright and MIT license are retained.
 
 A [magpie](https://usemagpie.ai) / OpenCode provider plugin for **Google Vertex AI**. Sign in with a service-account JSON (or Application Default Credentials) and the plugin exposes every model your GCP project can actually call — Gemini chat and image models, TTS, Veo video, Lyria music, embeddings, audio transcription, MaaS partner models (DeepSeek, Qwen, GLM, Kimi, MiniMax, gpt-oss, Grok, Gemma) and Claude — as one provider.
