@@ -5,7 +5,7 @@ describe("regionsFor", () => {
   const entry = { regions: ["global", "us-central1", "europe-west4"] }
 
   test("a pinned region is the only one tried", () => {
-    expect(regionsFor(entry, { location: "auto" }, "europe-west1")).toEqual(["europe-west1"])
+    expect(regionsFor(entry, { location: "auto" }, "europe-west4")).toEqual(["europe-west4"])
   })
 
   test("the preferred region goes first when the model serves it", () => {
@@ -48,6 +48,18 @@ function replies(...list) {
 }
 
 describe("withRegions", () => {
+  test("preserves error retry headers while dropping stale body encoding and length", async () => {
+    const res = await withRegions(["global"], async () => new Response("quota", {
+      status: 429,
+      headers: { "retry-after": "30", "x-request-id": "test-request", "content-encoding": "gzip", "content-length": "99" },
+    }))
+    expect(res.headers.get("retry-after")).toBe("30")
+    expect(res.headers.get("x-request-id")).toBe("test-request")
+    expect(res.headers.has("content-encoding")).toBe(false)
+    expect(res.headers.has("content-length")).toBe(false)
+    expect(await res.text()).toBe("quota")
+  })
+
   test("fails over 429 then 404 to a 200 and returns that success", async () => {
     const { attempt, seen } = replies({ status: 429, body: "quota" }, { status: 404, body: "no model" }, { status: 200, body: "ok" })
     const res = await withRegions(["global", "us-central1", "europe-west4"], attempt)

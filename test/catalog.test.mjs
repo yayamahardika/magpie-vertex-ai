@@ -207,7 +207,7 @@ describe("modelsFor", () => {
     const models = modelsFor({ options: { regionVariants: true } })
     expect(models["gemini-2.5-flash"]).toBeDefined()
     expect(models["gemini-2.5-flash@us-east5"].id).toBe("gemini-2.5-flash@us-east5")
-    expect(models["gemini-2.5-flash@global"].api.id).toBe("gemini-2.5-flash")
+    expect(models["gemini-2.5-flash@global"].api.id).toBe("gemini-2.5-flash@global")
     const expected = CATALOG.reduce((n, e) => n + 1 + e.regions.length, 0)
     expect(Object.keys(models).length).toBe(expected)
   })
@@ -250,11 +250,11 @@ describe("toModel", () => {
     expect(model.capabilities.output).toEqual({ text: false, image: false, audio: false, video: false })
   })
 
-  test("a pinned region changes the id and name, and keeps the api id", () => {
+  test("a pinned region is carried in the id, name and request api id", () => {
     const model = toModel(lookup("gemini-2.5-flash").entry, "us-east5")
     expect(model.id).toBe("gemini-2.5-flash@us-east5")
     expect(model.name).toBe("Gemini 2.5 Flash (us-east5)")
-    expect(model.api.id).toBe("gemini-2.5-flash")
+    expect(model.api.id).toBe("gemini-2.5-flash@us-east5")
   })
 
   test("MaaS models send the publisher-qualified api id", () => {

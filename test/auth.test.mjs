@@ -172,9 +172,9 @@ describe("credentials", () => {
     expect(() => parseCredentials(JSON.stringify({ type: "service_account", client_email: "a@b.c" }))).toThrow("lack private_key")
   })
 
-  test("identity is the service account email, or user:<client_id>", () => {
+  test("identity is the service account email, or an ADC user fingerprint", () => {
     expect(identity(serviceAccount("x@y.iam.gserviceaccount.com"))).toBe("x@y.iam.gserviceaccount.com")
-    expect(identity({ type: "authorized_user", client_id: "cid", client_secret: "s", refresh_token: "r" })).toBe("user:cid")
+    expect(identity({ type: "authorized_user", client_id: "cid", client_secret: "s", refresh_token: "r" })).toMatch(/^user:cid:[a-f0-9]{16}$/)
   })
 
   test("readCredentials takes JSON text, or a file path with $VAR expanded", async () => {
@@ -243,7 +243,7 @@ describe("service account sign-in", () => {
       refresh: text,
       access: "tok-1",
       expires: expect.any(Number),
-      accountId: "vertex@demo.iam.gserviceaccount.com",
+      accountId: "vertex@demo.iam.gserviceaccount.com@demo",
       project: "demo",
       location: "us-central1",
     })
@@ -286,7 +286,7 @@ describe("application default credentials sign-in", () => {
         refresh: JSON.stringify(adc),
         access: "adc-tok",
         expires: expect.any(Number),
-        accountId: "user:cid",
+        accountId: `${identity(adc)}@demo`,
         project: "demo",
         location: "europe-west4",
       })

@@ -1,4 +1,5 @@
 node_modules/
+.tools/
 .DS_Store
 *-sa.json
 *credentials*.json

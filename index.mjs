@@ -1,9 +1,8 @@
 // magpie provider plugin for Google Vertex AI: every callable model of the
 // account's GCP project, reached through the plugin fetch (lib/route.mjs).
 import { stat } from "node:fs/promises"
-import { join } from "node:path"
-import { authorizeAdc, authorizeCredentials, buildCtx, checkCredentials, accessToken, identity, parseCredentials, projectOf, readCredentials, refreshSignIn, tokenOf } from "./lib/auth.mjs"
-import { CATALOG, configModels, loadDiscovered, mergeDiscovered, modelsFor } from "./lib/catalog.mjs"
+import { authorizeAdc, authorizeCredentials, buildCtx, checkCredentials, accessToken, credentialKey, identity, parseCredentials, projectOf, readCredentials, refreshSignIn, tokenOf } from "./lib/auth.mjs"
+import { CATALOG, configModels, discoveredFile, loadDiscovered, mergeDiscovered, modelsFor } from "./lib/catalog.mjs"
 import { discover, isStale } from "./lib/discover.mjs"
 import { route } from "./lib/route.mjs"
 import { BASE, REGIONS } from "./lib/regions.mjs"
@@ -32,20 +31,23 @@ const LOCATION = {
 }
 
 const discovered = new Map() // catalog file → {mtime, entries}
-const started = new Set() // projects a discovery was started for in this process
+const started = new Set() // account-scoped catalog files with discovery in flight
+const retryAfter = new Map() // failed discoveries wait before probing again
 
 export const VertexAIPlugin = async (input, options = {}) => {
   const dir = input.directory
   const log = logger(input)
-  const ctxFor = (getAuth, project, location) =>
-    buildCtx({
+  const ctxFor = (getAuth, project, location, creds) => ({
+    ...buildCtx({
       getAuth,
       project,
       location,
       options,
       directory: dir,
       log: (msg) => log("info", msg),
-    })
+    }),
+    catalogScope: credentialKey(creds),
+  })
 
   return {
     config: async (cfg) => {
@@ -72,10 +74,10 @@ export const VertexAIPlugin = async (input, options = {}) => {
         const creds = parseCredentials(auth.refresh)
         const project = projectOf(creds, auth.project)
         if (!project) throw new Error("No GCP project for this account: sign in again and name one")
-        const ctx = ctxFor(getAuth, project, auth.location || options.location)
+        const ctx = ctxFor(getAuth, project, auth.location && auth.location !== "auto" ? auth.location : options.location, creds)
         return {
           baseURL: BASE,
-          fetch: async (url, init) => route(url, init, ctx, { entries: await entriesFor(dir, project, log) }),
+          fetch: async (url, init) => route(url, init, ctx, { entries: await entriesFor(dir, project, log, ctx.catalogScope) }),
         }
       },
     },
@@ -88,14 +90,14 @@ export const VertexAIPlugin = async (input, options = {}) => {
           const creds = parseCredentials(auth.refresh)
           const project = projectOf(creds, auth.project)
           if (!project) return given.models
-          const ctx = ctxFor(async () => auth, project, auth.location || options.location)
+          const ctx = ctxFor(async () => auth, project, auth.location && auth.location !== "auto" ? auth.location : options.location, creds)
           // A sign-in the vendor refuses throws here with signIn "expired".
           await ctx.token()
           const ttlHours = options.discoverTtlHours ?? 24
-          if (options.autoDiscover !== false && (await missingOrStale(discoveredPath(dir, project), ttlHours))) {
+          if (options.autoDiscover !== false && (await missingOrStale(discoveredPath(dir, project, ctx.catalogScope), ttlHours))) {
             discoverOnce(ctx, dir, log)
           }
-          return modelsFor({ entries: await entriesFor(dir, project, log), options })
+          return modelsFor({ entries: await entriesFor(dir, project, log, ctx.catalogScope), options })
         } catch (e) {
           if (e?.signIn) throw e
           log("error", `models: ${e?.message ?? e}`)
@@ -106,13 +108,11 @@ export const VertexAIPlugin = async (input, options = {}) => {
   }
 }
 
-function discoveredPath(dir, project) {
-  return join(dir, "vertex-ai", `catalog-${project}.json`)
-}
+const discoveredPath = discoveredFile
 
 // The project's catalog: the discovered one, reloaded when its file changes.
-async function entriesFor(dir, project, log) {
-  const file = discoveredPath(dir, project)
+async function entriesFor(dir, project, log, scope) {
+  const file = discoveredPath(dir, project, scope)
   const st = await stat(file).catch(() => null)
   const mtime = st?.mtimeMs ?? 0
   const hit = discovered.get(file)
@@ -120,7 +120,7 @@ async function entriesFor(dir, project, log) {
   let entries = CATALOG
   if (st) {
     try {
-      const d = await loadDiscovered(dir, project)
+      const d = await loadDiscovered(dir, project, scope)
       if (d) entries = mergeDiscovered(d)
     } catch (e) {
       log("error", `${file}: ${e?.message ?? e}`)
@@ -135,10 +135,18 @@ async function missingOrStale(file, ttlHours) {
   return !st || isStale(file, ttlHours)
 }
 
-function discoverOnce(ctx, dir, log) {
-  if (started.has(ctx.project)) return
-  started.add(ctx.project)
-  discover(ctx, { dir }).catch((e) => log("error", `catalog discovery for ${ctx.project} failed: ${e?.message ?? e}`))
+function discoverOnce(ctx, dir, log, run = discover) {
+  const key = discoveredPath(dir, ctx.project, ctx.catalogScope)
+  if (started.has(key) || Date.now() < (retryAfter.get(key) ?? 0)) return
+  started.add(key)
+  return Promise.resolve()
+    .then(() => run(ctx, { dir }))
+    .then(() => retryAfter.delete(key))
+    .catch((e) => {
+      retryAfter.set(key, Date.now() + 60_000)
+      log("error", `catalog discovery for ${ctx.project} failed: ${e?.message ?? e}`)
+    })
+    .finally(() => started.delete(key))
 }
 
 // Plugin logs go to OpenCode's app.log when it is there, else to stderr (magpie logs it).
@@ -156,6 +164,7 @@ export const _internal = {
   route,
   buildCtx,
   entriesFor,
+  discoverOnce,
   discoveredPath,
   parseCredentials,
   readCredentials,

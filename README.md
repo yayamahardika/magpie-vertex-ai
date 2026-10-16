@@ -1,5 +1,7 @@
 # magpie-vertex-ai
 
+Maintained fork: [yayamahardika/magpie-vertex-ai](https://github.com/yayamahardika/magpie-vertex-ai), based on [HzTTT/magpie-vertex-ai](https://github.com/HzTTT/magpie-vertex-ai). Original copyright and MIT license are retained.
+
 A [magpie](https://usemagpie.ai) / OpenCode provider plugin for **Google Vertex AI**. Sign in with a service-account JSON (or Application Default Credentials) and the plugin exposes every model your GCP project can actually call — Gemini chat and image models, TTS, Veo video, Lyria music, embeddings, audio transcription, MaaS partner models (DeepSeek, Qwen, GLM, Kimi, MiniMax, gpt-oss, Grok, Gemma) and Claude — as one provider.
 
 - Provider id: `vertex-ai`. Every model is addressed as `vertex-ai/<key>` (`vertex-ai/gemini-3.8-flash`, `vertex-ai/veo-3.1-generate-001`, ...).
@@ -13,7 +15,7 @@ A [magpie](https://usemagpie.ai) / OpenCode provider plugin for **Google Vertex 
 ## Install
 
 ```sh
-magpie plugin add github:HzTTT/magpie-vertex-ai
+magpie plugin add github:yayamahardika/magpie-vertex-ai
 # or a local checkout: magpie plugin add /path/to/magpie-vertex-ai
 magpie plugin login vertex-ai
 ```
@@ -30,7 +32,7 @@ Three prompts:
 
 ### Method 2 — Application Default Credentials
 
-Reads `$GOOGLE_APPLICATION_CREDENTIALS`, else `~/.config/gcloud/application_default_credentials.json` (create it with `gcloud auth application-default login`). Same project and region prompts.
+Reads `$GOOGLE_APPLICATION_CREDENTIALS`, else `application_default_credentials.json` inside `$CLOUDSDK_CONFIG` when set, otherwise `%APPDATA%\gcloud` on Windows or `~/.config/gcloud` on Linux/macOS (create it with `gcloud auth application-default login`). Same project and region prompts. Credential paths accept both `~/` and `~\`.
 
 ### What is stored, and token renewal
 
@@ -65,7 +67,7 @@ Model keys never contain `/`: a MaaS key drops the publisher (`vertex-ai/deepsee
 
 - The built-in catalog (`lib/catalog.mjs`) lists each model's serving regions (Gemini 3.x and most MaaS models on `global`, Veo and Gemini 2.5 Pro on `us-central1`, Claude 3 Opus on `us-east5` / `europe-west1` / `europe-west4` / `asia-southeast1`, and so on).
 - **Region failover**: per request the plugin tries the pinned region (when you called `key@region`), else the login region when the model serves there, else every catalog region in order (`global` first, then `us-central1`, then the rest). It moves on for 404 / 429 / 5xx, and for 400 / 403 bodies that say the model is not available or not servable in that region; otherwise the last upstream error is returned.
-- **Background discovery**: on the first models listing the plugin probes, per project, which models the account can actually call. It lists every Vertex publisher in every serving region, then probes each model per region: `countTokens` for Gemini, `:embedContent` for `gemini-embedding-*` and `:predict` for other embeddings, a 1-token chat for MaaS, `count-tokens` for Claude, a metadata GET for Veo/Lyria, the voices list for Chirp. A region counts only on HTTP 200; 429/5xx are retried once. Because `countTokens` ignores model-level gates, each Gemini chat model then gets one 1-token `generateContent` (Gemini TTS: a one-word synthesis) in its first region. A model whose only failures were transient (quota 429, network, 5xx) is kept and marked `transient: true` rather than dropped: at its catalog regions when it is in the built-in catalog, otherwise at the regions that listed it. Verdicts are cached at `<magpie config>/vertex-ai/catalog-<project>.json` (written atomically). Most probes are free; the billed ones are tiny (1-token chats, single-word TTS, embedding probes). While enabled (`autoDiscover`), the file is refreshed in the background when missing or older than `discoverTtlHours`, and reloaded as soon as it changes. Only models the discovery proved callable, or kept as transient, are offered.
+- **Background discovery**: on the first models listing the plugin probes, per project and credentials identity, which models the account can actually call. It lists every Vertex publisher in every serving region, then probes each model per region: `countTokens` for Gemini, `:embedContent` for `gemini-embedding-*` and `:predict` for other embeddings, a 1-token chat for MaaS, `count-tokens` for Claude, a metadata GET for Veo/Lyria, the voices list for Chirp. HTTP 200 counts as available; a narrowly recognized parameter-validation HTTP 400 also counts as endpoint acceptance. 429/5xx are retried once. Because `countTokens` ignores model-level gates, each Gemini chat model then gets one 1-token `generateContent` (Gemini TTS: a one-word synthesis) in its first region. A model whose only failures were transient (quota 429, network, 5xx) is kept and marked `transient: true` rather than dropped: at its catalog regions when it is in the built-in catalog, otherwise at the regions that listed it. Verdicts are cached at `<magpie config>/vertex-ai/catalog-<project>-<fingerprint>.json` (written atomically, isolated by credentials identity). Most probes are free; the billed ones are tiny (1-token chats, single-word TTS, embedding probes). While enabled (`autoDiscover`), the file is refreshed in the background when missing or older than `discoverTtlHours`, and reloaded as soon as it changes. Only models the discovery proved callable, or kept as transient, are offered.
 - **Manual discovery**: `bun scripts/discover.mjs --credentials <file> [--project <id>] [--dir <magpie config dir>]` (dir defaults to `$XDG_CONFIG_HOME/magpie` or `~/.config/magpie`). It prints a table of callable models with their regions and why unavailable models failed.
 
 ## Options
@@ -93,7 +95,21 @@ Set with `magpie plugin options magpie-vertex-ai '<json>'` (or Plugins -> Instal
 | `veoTimeoutSec` | 900 | Seconds before the Veo poll gives up |
 | `lyria.negativePrompt` | none | Forwarded as `negative_prompt` |
 
-## Limitations
+## Security and account isolation (2026-10-16)
+
+- Token exchange accepts only these exact HTTPS endpoints: `https://oauth2.googleapis.com/token`, `https://accounts.google.com/o/oauth2/token`, and `https://www.googleapis.com/oauth2/v4/token`. An omitted `token_uri` uses the first. Other endpoints fail before any token request. Token exchange, discovery and inference refuse redirects.
+- Cached model IDs, publishers, families and regions are checked before use. Serving regions must appear in `lib/regions.mjs`; add new Google regions there before using them. Project IDs/numbers and resource path segments are checked before constructing paths or URLs. The production request wrapper also checks the final Google API host, protocol, port and user information.
+- Discovery caches are isolated by project and a SHA-256 credentials fingerprint: `<magpie config>/vertex-ai/catalog-<project>-<fingerprint>.json`. Manual discovery uses the same naming. Existing project-only caches are ignored by the plugin; with `autoDiscover: false`, run manual discovery with the same credentials to repopulate the cache. The fingerprint contains no literal secret, but it is a stable identifier, not encryption.
+- New sign-ins include the project in `accountId`; ADC users with the same OAuth client ID are distinguished by a refresh-token fingerprint. Re-login after upgrading may create a separate account beside an older sign-in. Existing saved credentials still work; remove an obsolete account through Magpie after checking the replacement.
+- Region variants carry the pin in the API ID delivered to the plugin. Timestamp transcription preserves it when switching models, and returns HTTP 400 before sending audio if the fallback model cannot serve that region. `location` remains a preference with failover; a login region of `auto` allows `options.location` to apply. It is not a general data-residency policy: discovery probes multiple regions and Chirp uses the global TTS API.
+- Generated media and catalog files request mode `0600`, and newly created directories request `0700`. Windows ACLs and existing-directory permissions still depend on the environment. Media files use exclusive creation to prevent accidental overwrite and are not automatically deleted.
+- Credentials JSON is still stored in the account's `refresh` field. The [official plugin contract](https://usemagpie.ai/docs/zh/plugins) documents `plugin-auth.json` and merged `auth.refresh` results; this does not establish encryption, Windows ACLs, or backup/sync protection on your machine.
+
+See [README.audit.md](README.audit.md) for the verification scope and regression checks.
+
+Version 0.1.1 also preserves upstream retry headers through every error handler, returns JSON for non-streaming Gemini/media requests, uses the account catalog for timestamp transcription fallback, supports legacy domain-scoped project IDs with encoded paths/filenames, and backs off for 60 seconds after a failed discovery. Existing SSE behavior remains available for streaming requests.
+
+## Operational limitations
 
 - magpie routes `/v1/images/generations` (and `/v1/images/edits`) and `/v1/videos` only to its built-in providers; a plugin's `fetch` never sees those endpoints. Imagen and Veo are therefore exposed as **chat models**. (Imagen is not included at all: no Imagen model was provisioned on the author's project, so the `:predict` path was never exercised.)
 - magpie has no `/v1/audio/speech` endpoint, so TTS is exposed as chat models that return a file.
@@ -129,8 +145,8 @@ MIT
 
 ## 中文：安装与登录
 
-- 安装：`magpie plugin add github:HzTTT/magpie-vertex-ai`（或本地文件夹路径）。提供者 id 为 `vertex-ai`，模型形如 `vertex-ai/gemini-3.8-flash`。
+- 安装：`magpie plugin add github:yayamahardika/magpie-vertex-ai`（或本地文件夹路径）。提供者 id 为 `vertex-ai`，模型形如 `vertex-ai/gemini-3.8-flash`。
 - 登录：`magpie plugin login vertex-ai`。方式一「Service account / credentials JSON」：输入凭据 JSON 的路径或整段 JSON（留空则读 `$GOOGLE_APPLICATION_CREDENTIALS`），GCP 项目 id（留空取凭据里的 `project_id`），区域（推荐 `auto`，自动选择首个可用区域）。方式二「Application Default Credentials」：使用 `gcloud auth application-default login` 生成的凭据，同样填项目和区域。
 - 存储：magpie 把账号写入其配置目录（默认 `~/.config/magpie`）下的 `plugin-auth.json`（权限 600），凭据 JSON 全文存在账号的 `refresh` 字段，`access` / `expires` 存访问令牌；令牌到期前 5 分钟由 magpie 经 `auth.refresh` 自动续期。
 - IAM：项目上需要 `roles/aiplatform.user`；使用 Chirp 3 HD 需启用 Cloud Text-to-Speech API；Claude 还要求结算账号有 Vertex 上的 Anthropic 使用资格。
-- 选项：`magpie plugin options magpie-vertex-ai '{"include":["/^gemini-/"],"regionVariants":true}'`（`include`/`exclude` 写完整模型名或 `/正则/`）；后台发现会按项目缓存到 `<magpie 配置目录>/vertex-ai/catalog-<project>.json`（TTL 默认 24 小时），也可手动 `bun scripts/discover.mjs --credentials <文件>`。
+- 选项：`magpie plugin options magpie-vertex-ai '{"include":["/^gemini-/"],"regionVariants":true}'`（`include`/`exclude` 写完整模型名或 `/正则/`）；后台发现会按项目和凭据身份隔离缓存到 `<magpie 配置目录>/vertex-ai/catalog-<project>-<fingerprint>.json`（TTL 默认 24 小时），也可手动 `bun scripts/discover.mjs --credentials <文件>`。

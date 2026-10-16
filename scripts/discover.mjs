@@ -2,7 +2,7 @@
 // Usage: bun scripts/discover.mjs [--credentials path] [--project id] [--dir magpie-config-dir]
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { accessToken, projectOf, readCredentials } from "../lib/auth.mjs"
+import { accessToken, credentialKey, projectOf, readCredentials } from "../lib/auth.mjs"
 import { discoveredFile } from "../lib/catalog.mjs"
 import { discover } from "../lib/discover.mjs"
 
@@ -81,12 +81,13 @@ async function main() {
 
   const ctx = {
     project,
+    catalogScope: credentialKey(creds),
     token: () => accessToken(creds),
     fetch: globalThis.fetch,
     log: (msg) => process.stderr.write(`${msg}\n`),
   }
   const data = await discover(ctx, { dir, onProgress: progress() })
-  printSummary(data, discoveredFile(dir, project))
+  printSummary(data, discoveredFile(dir, project, ctx.catalogScope))
 }
 
 main().catch((err) => {
