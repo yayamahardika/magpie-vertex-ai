@@ -10,6 +10,30 @@
 - 纯 ESM `.mjs` 实现，零运行时依赖，在 magpie 插件宿主内的 Bun 环境中运行。
 - 工作原理：magpie 将发往该提供者模型的所有请求路由到插件在哨兵基址（sentinel base URL）上的 `fetch`；插件根据模型家族将路径映射到对应的 Vertex 端点（`:streamGenerateContent`、`:rawPredict`、OpenAI 兼容的 `endpoints/openapi` 接口等），使用保存的凭据签发 OAuth 访问令牌（作用域 `cloud-platform`），按顺序尝试模型的可用服务区域，并以客户端智能体所使用的协议流式返回响应。
 
+**快速导航：** [Fork 后的更新](#fork-后的更新) · [安装](#安装) · [登录](#登录) · [模型](#模型) · [选项](#选项) · [安全与账号隔离](#安全与账号隔离2026-10-16) · [运行限制](#运行限制) · [开发与测试](#开发与测试) · [审核记录](README.audit.md)
+
+## Fork 后的更新
+
+本分支基于上游提交 [`4edf85f`](https://github.com/HzTTT/magpie-vertex-ai/commit/4edf85f45fc602d5921de795a5395e553f308dfa)。下文介绍的模型家族与媒体能力继承自上游；fork 后的改动集中在安全加固、账号隔离、兼容性修复和文档完善。
+
+### 0.1.1 — 2026-10-16
+
+| 方向 | Fork 后的改动 |
+|---|---|
+| 请求安全 | 令牌交换仅允许文档列出的三个 Google OAuth 端点；禁止重定向；校验缓存模型元数据、资源路径、区域和最终 Google API URL。 |
+| 账号隔离 | 令牌和发现缓存按凭据身份与项目隔离；区分共用 OAuth 客户端 ID 的 ADC 用户；新账号 ID 包含项目标识。 |
+| 区域路由 | 路由和带时间戳转写回退保留显式 `@region`；登录区域为 `auto` 时采用 `options.location`；回退区域不可用时，在上传音频前拒绝请求。 |
+| 协议兼容 | 错误转换保留上游重试响应头；非流式 Gemini 和媒体请求返回 JSON，流式请求保留 SSE；从当前账号目录选择转写回退模型。 |
+| 模型发现与凭据 | 后台发现失败后退避 60 秒，并允许后续重新刷新；兼容 Windows ADC 路径、`CLOUDSDK_CONFIG`、`~\` 路径及旧式域作用域项目 ID。 |
+| 媒体处理 | 创建文件和目录时请求私有权限；媒体文件独占创建；发现临时文件使用唯一名称；媒体请求取消时继续抛出取消异常，避免转成可重试错误。 |
+| 文档与打包 | 新增[中文说明](README.zh-CN.md)、[审核与回归记录](README.audit.md)及安全回归测试；更新 fork 仓库与包元数据，将图标资源和审核记录纳入包文件清单。 |
+
+实现提交：[`ee04bca`](https://github.com/yayamahardika/magpie-vertex-ai/commit/ee04bcab7255c74ac26252dd466e0959468de9aa)。中文文档提交：[`4c12221`](https://github.com/yayamahardika/magpie-vertex-ai/commit/4c12221)。
+
+**升级注意：** 旧版仅按项目命名的发现缓存会被忽略。若设置了 `autoDiscover: false`，请使用相同凭据重新运行手动发现。已保存的旧凭据仍可读取；重新登录可能按新 ID 创建独立账号，确认可用后再移除旧账号。
+
+**验证范围：** 2026-10-16 的审核记录为 **321 项测试通过、0 失败，共 16 个测试文件**，上游请求均使用模拟响应。这是已记录的发布验证结果，并非实时云端验证；尚未验证真实 Magpie 宿主集成、Google 登录/推理及 Windows ACL 行为。详情与剩余限制见[审核记录](README.audit.md)。
+
 ## 为什么使用 `vertex-ai` 而不是 `google-vertex`
 
 `google-vertex` 是 magpie 内置 Vertex 预设的 ID（`magpie provider add google-vertex ...`）。如果插件的 `auth.provider` 与内置预设 ID 相同，magpie 会将其强制重命名（为 `google-vertex-plugin`），从而破坏模型寻址与登录流程。而 `vertex-ai` 未被占用。同时 models.dev 上也没有 `vertex-ai` 条目，因此插件会在自身的 `config` 钩子中自行声明该提供者及其完整的模型目录。
@@ -108,8 +132,6 @@ magpie 会将登录信息保存在其配置目录（`~/.config/magpie` 或 `$XDG
 - 凭据 JSON 全文仍保存在账号的 `refresh` 字段中。[官方插件开发文档](https://usemagpie.ai/docs/zh/plugins)记录了 `plugin-auth.json` 及 `auth.refresh` 返回结果的合并机制；但这并不构成本机上的加密存储、Windows ACL 保护或备份/同步防护。
 
 关于核验范围与回归检查详情，请参阅 [README.audit.md](README.audit.md)。
-
-0.1.1 版本还在所有错误处理器中保留了上游重试响应头（如 `Retry-After`），为非流式 Gemini/媒体请求返回标准 JSON，在带时间戳的音频转写回退时使用当前账号的发现目录，支持带编码路径/文件名的旧式域作用域项目 ID（如 `example.com:project-id`），并在模型发现失败后退避 60 秒。流式请求仍保持原有的 SSE 行为。
 
 ## 运行限制
 

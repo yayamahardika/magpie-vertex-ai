@@ -10,6 +10,30 @@ A [magpie](https://usemagpie.ai) / OpenCode provider plugin for **Google Vertex 
 - Pure ESM `.mjs`, no runtime dependencies, runs on Bun inside magpie's plugin host.
 - How it works: magpie routes every request for the provider's models to the plugin's `fetch` at a sentinel base URL; the plugin maps the path to the right Vertex endpoint for the model family (`:streamGenerateContent`, `:rawPredict`, the OpenAI-compatible `endpoints/openapi` surface, ...), mints an OAuth access token from the stored credentials (scope `cloud-platform`), tries the model's serving regions in order, and streams the reply back in the protocol the agent speaks.
 
+**Quick links:** [Fork updates](#updates-since-the-fork) · [Install](#install) · [Sign in](#sign-in) · [Models](#models) · [Options](#options) · [Security](#security-and-account-isolation-2026-10-16) · [Limitations](#operational-limitations) · [Development](#development) · [Audit report](README.audit.md)
+
+## Updates since the fork
+
+This fork starts from upstream commit [`4edf85f`](https://github.com/HzTTT/magpie-vertex-ai/commit/4edf85f45fc602d5921de795a5395e553f308dfa). The inherited model families and media features described below come from upstream; the fork's changes focus on security, account isolation, compatibility and documentation.
+
+### Version 0.1.1 — 2026-10-16
+
+| Area | Changes in this fork |
+|---|---|
+| Request security | Allow only the three documented Google OAuth token endpoints; reject redirects; validate cached model metadata, resource paths, regions and final Google API URLs. |
+| Account isolation | Separate token and discovery caches by credentials identity and project; distinguish ADC users sharing an OAuth client ID; include the project in new account IDs. |
+| Region routing | Preserve explicit `@region` pins through routing and timestamp transcription fallback; honor `options.location` when the login region is `auto`; reject an unsupported fallback region before uploading audio. |
+| Protocol compatibility | Preserve upstream retry headers through error conversion; return JSON for non-streaming Gemini and media requests while retaining SSE for streaming; select transcription fallback models from the account catalog. |
+| Discovery and credentials | Retry failed background discovery after a 60-second backoff and allow later refreshes; support Windows ADC paths, `CLOUDSDK_CONFIG`, `~\` paths and legacy domain-scoped project IDs. |
+| Media handling | Request private file/directory modes, create media files exclusively, use unique discovery temporary files, and propagate media request cancellation instead of returning a retryable error. |
+| Documentation and packaging | Add the [Chinese README](README.zh-CN.md), [audit and regression report](README.audit.md), security regression tests, and fork repository/package metadata; include assets and the audit report in the package. |
+
+Implementation: [`ee04bca`](https://github.com/yayamahardika/magpie-vertex-ai/commit/ee04bcab7255c74ac26252dd466e0959468de9aa). Chinese documentation: [`4c12221`](https://github.com/yayamahardika/magpie-vertex-ai/commit/4c12221).
+
+**Upgrading:** old project-only discovery caches are ignored. With `autoDiscover: false`, rerun manual discovery using the same credentials. Existing saved credentials remain readable; signing in again may create a separate account under the new ID, so verify it before removing an old account.
+
+**Verification scope:** the 2026-10-16 audit records **321 passing tests, 0 failures, across 16 test files**, using mocked upstream requests. These are recorded release results, not a live cloud check. Real Magpie host integration, Google sign-in/inference and Windows ACL behavior were not verified. See the [audit report](README.audit.md) for details and remaining limitations.
+
 ## Why `vertex-ai` and not `google-vertex`
 
 `google-vertex` is the id of magpie's built-in Vertex preset (`magpie provider add google-vertex ...`). A plugin whose `auth.provider` equals a preset id is force-renamed by magpie (to `google-vertex-plugin`), which breaks model addressing and sign-in. `vertex-ai` is free. There is also no `vertex-ai` entry on models.dev, so the plugin declares the provider and its full model catalog itself in its `config` hook.
@@ -109,8 +133,6 @@ Set with `magpie plugin options magpie-vertex-ai '<json>'` (or Plugins -> Instal
 
 See [README.audit.md](README.audit.md) for the verification scope and regression checks.
 
-Version 0.1.1 also preserves upstream retry headers through every error handler, returns JSON for non-streaming Gemini/media requests, uses the account catalog for timestamp transcription fallback, supports legacy domain-scoped project IDs with encoded paths/filenames, and backs off for 60 seconds after a failed discovery. Existing SSE behavior remains available for streaming requests.
-
 ## Operational limitations
 
 - magpie routes `/v1/images/generations` (and `/v1/images/edits`) and `/v1/videos` only to its built-in providers; a plugin's `fetch` never sees those endpoints. Imagen and Veo are therefore exposed as **chat models**. (Imagen is not included at all: no Imagen model was provisioned on the author's project, so the `:predict` path was never exercised.)
@@ -144,11 +166,3 @@ m provider test vertex-ai gemini-3.8-flash
 ## License
 
 MIT
-
-## 中文：安装与登录
-
-- 安装：`magpie plugin add github:yayamahardika/magpie-vertex-ai`（或本地文件夹路径）。提供者 id 为 `vertex-ai`，模型形如 `vertex-ai/gemini-3.8-flash`。
-- 登录：`magpie plugin login vertex-ai`。方式一「Service account / credentials JSON」：输入凭据 JSON 的路径或整段 JSON（留空则读 `$GOOGLE_APPLICATION_CREDENTIALS`），GCP 项目 id（留空取凭据里的 `project_id`），区域（推荐 `auto`，自动选择首个可用区域）。方式二「Application Default Credentials」：使用 `gcloud auth application-default login` 生成的凭据，同样填项目和区域。
-- 存储：magpie 把账号写入其配置目录（默认 `~/.config/magpie`）下的 `plugin-auth.json`（权限 600），凭据 JSON 全文存在账号的 `refresh` 字段，`access` / `expires` 存访问令牌；令牌到期前 5 分钟由 magpie 经 `auth.refresh` 自动续期。
-- IAM：项目上需要 `roles/aiplatform.user`；使用 Chirp 3 HD 需启用 Cloud Text-to-Speech API；Claude 还要求结算账号有 Vertex 上的 Anthropic 使用资格。
-- 选项：`magpie plugin options magpie-vertex-ai '{"include":["/^gemini-/"],"regionVariants":true}'`（`include`/`exclude` 写完整模型名或 `/正则/`）；后台发现会按项目和凭据身份隔离缓存到 `<magpie 配置目录>/vertex-ai/catalog-<project>-<fingerprint>.json`（TTL 默认 24 小时），也可手动 `bun scripts/discover.mjs --credentials <文件>`。
